@@ -2,7 +2,6 @@ import RPi.GPIO as GPIO
 import sys
 sys.path.insert(0, './drivers') #code used for writing to lcd display, not my own
 from time import sleep
-import random
 from mfrc522 import SimpleMFRC522
 import drivers 
 
@@ -48,8 +47,8 @@ resetButton = 12
 GPIO.setmode(GPIO.BOARD) 
 GPIO.setup(player1Button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(player2Button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-#reset button not currently working, nor does it have a button on the board
-GPIO.setup(resetButton, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+#reset button not currently on the board
+#GPIO.setup(resetButton, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 #Keeps track of game state
 notStarted = True
@@ -71,6 +70,9 @@ player2PredatorTrack = set()
 cardsChainedPlayer1 = set()
 cardsChainedPlayer2 = set()
 
+cardsInPlayer1 = set()
+cardsInPlayer2 = set()
+
 #scores
 player1Score = 0
 player2Score = 0
@@ -85,7 +87,7 @@ def main():
         #Begins the game
         setUp()
         sleep(2)
-    #
+
     global cardsPlayedOnTurn
     try:
         while True:
@@ -268,6 +270,7 @@ def handleNativeCard(card):
         cardTrackPrey = player1PreyTrack
         cardTrackPredator = player1PredatorTrack
         cardTrackPlant = player1PlantTrack
+        cardsInPlay = cardsInPlayer1
     elif currentTurn == 2:
         #updates the score of current player
         player2Score += card[1][1]
@@ -284,6 +287,7 @@ def handleNativeCard(card):
         cardTrackPrey = player2PreyTrack
         cardTrackPredator = player2PredatorTrack
         cardTrackPlant = player2PlantTrack
+        cardsInPlay = cardsInPlayer2
     else: print("invalid player state")
 
     length = len(cardsInPlay)
@@ -292,7 +296,6 @@ def handleNativeCard(card):
     #Checks if card has already been played, which would only happen in case of chain
     if checkForChain(cardsInPlay, length):
         cardsChained.add(card[1][0])
-        print(cardsChained)
         #Checks if chain has been formed
         if len(cardsChained) % 3 == 0 and len(cardsChained) > 2:
             cardToRemovePredator = ""
@@ -414,8 +417,8 @@ def gameWon(player):
         sleep(10)
         reset_game(12)
         
-#used to reset game, currently faulty and has no button on board
-def reset_game(channel):
+#used to reset game, was linked to a button, but this was not put on the board. Currently used for testing
+def reset_game():
     global player1Score
     global player2Score
     global player1HasPassed
@@ -447,14 +450,98 @@ def reset_game(channel):
     player2Score = 0
     notStarted = True
 
-    main()
-
 #triggers button pressed function when player 1 turn button pressed
 GPIO.add_event_detect(player1Button,  GPIO.FALLING, callback=button_pressed, bouncetime=1000)
 #triggers button pressed function when player 2 turn button pressed
 GPIO.add_event_detect(player2Button, GPIO.FALLING, callback=button_pressed, bouncetime=1000)
-#reset button not currently working
-GPIO.add_event_detect(resetButton, GPIO.FALLING, callback=reset_game, bouncetime=1000) 
+#reset button not on the board
+#GPIO.add_event_detect(resetButton, GPIO.FALLING, callback=reset_game, bouncetime=1000) 
+
+
+#tests cards are added to the correct score and the correct game track
+def testAddCardToScore():
+    global currentTurn
+    currentTurn = 1
+    #mimicks the way cards are read on the reader
+    for card in enumerate(cards.items()):
+        #gets the first card in the dictionary
+        if card[1][0] == 'Red Fox':
+            cardToTest = card[1]
+    handleNativeCard(cardToTest)
+
+    #checks the red fox has been added to the score, if not it will throw an assertion error
+    assert player1Score == 9, "Incorrect Score"
+    #checks the red fox has been added to the predator track
+    assert len(player1PredatorTrack) == 1, "Failed to add to track"
+
+#Tests if weather cards remove cards from the correct track and updates scores
+def testingWeatherCards():
+    #weather cards affect the other player, so we will remove the fox played in the test above 
+    global currentTurn
+    currentTurn = 2
+    assert len(player1PredatorTrack) > 0, "No cards in play"
+    for card in enumerate(cards.items()):
+        if card[1][0] == "Meteoroid":
+            weatherCard = card[1]
+    #the meterioid card will remove the fox from player 1's predator track
+    handleWeatherCard(weatherCard)
+
+    #checks if the fox has been removed, making the track empty
+    assert len(player1PredatorTrack) == 0, "Card has not been remove"
+    #checks if the fox's score has been removed
+    assert player1Score == 0, "Score has not been updated"
+
+#Tests if chains are formed when the same 3 cards are played onto the board
+def testingChains():
+    global currentTurn
+    for card in enumerate(cards.items()):
+        if card[1][0] == "Red Fox":
+            predCard = card[1]
+        elif card[1][0] == 'Meadow Grasshopper':
+            plantCard = card[1]
+        elif card[1][0] == "Mountain Hare":
+            preyCard = card[1]
+        elif card[1][0] == "Flood":
+            cardToTestChain = card[1]
+    handleNativeCard(predCard)
+    handleNativeCard(plantCard)
+    handleNativeCard(preyCard)
+    handleNativeCard(predCard)
+    handleNativeCard(plantCard)
+    #when this card is played, chain is formed
+    handleNativeCard(preyCard)
+
+    #Chained cards should all be in this set
+    assert len(cardsChainedPlayer2) == 3, "Chain has not been formed"
+    #Chained cards are removed from the tracks of the board
+    assert len(player2PlantTrack) == 0 and len(player2PreyTrack) == 0 and len(player2PredatorTrack) == 0, "Cards have not been removed from tracks, therefore are vulnerable to weather cards"
+
+    currentTurn = 1
+    #tests if chain is protected from weather cards
+    handleWeatherCard(cardToTestChain)
+    assert player2Score == 34
+
+
+#Tests if invasive cards reduce the score of the other player
+def testingInvasiveCards():
+    print(currentTurn)
+    for card in enumerate(cards.items()):
+        if card[1][0] == "Grey Squirrel":
+            invasiveCard = card[1]
+    handleInvasiveCard(invasiveCard)
+    #the squirrel has a power of 5, and player 1 has played the card
+    # so it should reduce the score from 34 (as a result of the test above) to 29
+    assert player2Score == 29
+
 
 
 main()
+
+#Testing functions. use independently of game e.g. to run comment out calling main function and remove
+#the comments from the test functions. Run functions in the order specified below, as they mimick a 
+# game being played i.e the game state changes which the following function will verify.  
+
+#testAddCardToScore()
+#testingWeatherCards()
+#testingChains()
+#testingInvasiveCards()
